@@ -1,4 +1,5 @@
 // Sudoku engine: seeded generation, uniqueness check and a simple logic grader.
+// Supports classic sudoku and the diagonal variant (both long diagonals hold 1-9).
 (function (global) {
   'use strict';
 
@@ -35,22 +36,6 @@
     COL[i] = i % 9;
     BOX[i] = Math.floor(ROW[i] / 3) * 3 + Math.floor(COL[i] / 3);
   }
-  const UNITS = [];
-  for (let r = 0; r < 9; r++) UNITS.push(Array.from({ length: 9 }, (_, c) => r * 9 + c));
-  for (let c = 0; c < 9; c++) UNITS.push(Array.from({ length: 9 }, (_, r) => r * 9 + c));
-  for (let b = 0; b < 9; b++) {
-    const u = [];
-    for (let i = 0; i < 81; i++) if (BOX[i] === b) u.push(i);
-    UNITS.push(u);
-  }
-  const PEERS = [];
-  for (let i = 0; i < 81; i++) {
-    const p = [];
-    for (let j = 0; j < 81; j++) {
-      if (j !== i && (ROW[j] === ROW[i] || COL[j] === COL[i] || BOX[j] === BOX[i])) p.push(j);
-    }
-    PEERS.push(p);
-  }
   const POP = new Uint8Array(1024);
   for (let m = 0; m < 1024; m++) {
     let c = 0, x = m;
@@ -59,60 +44,77 @@
   }
   const ALL = 0x3FE; // bits 1..9
 
-  function solvedGrid(r) {
-    const g = new Array(81).fill(0);
-    const rows = new Array(9).fill(0), cols = new Array(9).fill(0), boxes = new Array(9).fill(0);
+  // UNITS: 0-8 rows, 9-17 columns, 18-26 boxes, 27-28 diagonals (diagonal variant only).
+  // CU[i]: the units cell i belongs to. PEERS[i]: every other cell sharing a unit with i.
+  function makeVariant(diag) {
+    const UNITS = [];
+    for (let r = 0; r < 9; r++) UNITS.push(Array.from({ length: 9 }, (_, c) => r * 9 + c));
+    for (let c = 0; c < 9; c++) UNITS.push(Array.from({ length: 9 }, (_, r) => r * 9 + c));
+    for (let b = 0; b < 9; b++) UNITS.push(Array.from({ length: 81 }, (_, i) => i).filter(i => BOX[i] === b));
+    if (diag) {
+      UNITS.push(Array.from({ length: 9 }, (_, k) => k * 10));
+      UNITS.push(Array.from({ length: 9 }, (_, k) => k * 8 + 8));
+    }
+    const CU = Array.from({ length: 81 }, () => []);
+    UNITS.forEach((u, ui) => u.forEach(i => CU[i].push(ui)));
+    const PEERS = CU.map((us, i) => [...new Set(us.flatMap(u => UNITS[u]))].filter(j => j !== i));
+    return { diag, UNITS, CU, PEERS };
+  }
+  const CLASSIC = makeVariant(false);
+  const DIAGONAL = makeVariant(true);
+
+  function solvedGrid(r, v) {
+    const g = new Array(81).fill(0), um = new Array(v.UNITS.length).fill(0);
+    const used = i => { let m = 0; for (const u of v.CU[i]) m |= um[u]; return m; };
     (function fill() {
       // always fill the most constrained cell next, so the search never thrashes
       let i = -1, bestN = 10;
       for (let j = 0; j < 81; j++) {
         if (g[j]) continue;
-        const n = POP[ALL & ~(rows[ROW[j]] | cols[COL[j]] | boxes[BOX[j]])];
+        const n = POP[ALL & ~used(j)];
         if (n < bestN) { bestN = n; i = j; }
       }
       if (i < 0) return true;
       if (bestN === 0) return false;
-      const ri = ROW[i], ci = COL[i], bi = BOX[i];
       for (const d of shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9], r)) {
         const bit = 1 << d;
-        if ((rows[ri] | cols[ci] | boxes[bi]) & bit) continue;
-        g[i] = d; rows[ri] |= bit; cols[ci] |= bit; boxes[bi] |= bit;
+        if (used(i) & bit) continue;
+        g[i] = d; for (const u of v.CU[i]) um[u] |= bit;
         if (fill()) return true;
-        g[i] = 0; rows[ri] &= ~bit; cols[ci] &= ~bit; boxes[bi] &= ~bit;
+        g[i] = 0; for (const u of v.CU[i]) um[u] &= ~bit;
       }
       return false;
     })();
     return g;
   }
 
-  function countSolutions(grid, limit) {
-    const g = grid.slice();
-    const rows = new Array(9).fill(0), cols = new Array(9).fill(0), boxes = new Array(9).fill(0);
+  function countSolutions(grid, limit, v = CLASSIC) {
+    const g = grid.slice(), um = new Array(v.UNITS.length).fill(0);
+    const used = i => { let m = 0; for (const u of v.CU[i]) m |= um[u]; return m; };
     for (let i = 0; i < 81; i++) {
       const d = g[i];
       if (!d) continue;
       const bit = 1 << d;
-      if ((rows[ROW[i]] | cols[COL[i]] | boxes[BOX[i]]) & bit) return 0;
-      rows[ROW[i]] |= bit; cols[COL[i]] |= bit; boxes[BOX[i]] |= bit;
+      if (used(i) & bit) return 0;
+      for (const u of v.CU[i]) um[u] |= bit;
     }
     let count = 0;
     (function search() {
       let best = -1, bestMask = 0, bestN = 10;
       for (let i = 0; i < 81; i++) {
         if (g[i]) continue;
-        const m = ALL & ~(rows[ROW[i]] | cols[COL[i]] | boxes[BOX[i]]);
+        const m = ALL & ~used(i);
         const n = POP[m];
         if (n === 0) return;
         if (n < bestN) { best = i; bestMask = m; bestN = n; if (n === 1) break; }
       }
       if (best < 0) { count++; return; }
-      const ri = ROW[best], ci = COL[best], bi = BOX[best];
       for (let d = 1; d <= 9; d++) {
         const bit = 1 << d;
         if (!(bestMask & bit)) continue;
-        g[best] = d; rows[ri] |= bit; cols[ci] |= bit; boxes[bi] |= bit;
+        g[best] = d; for (const u of v.CU[best]) um[u] |= bit;
         search();
-        g[best] = 0; rows[ri] &= ~bit; cols[ci] &= ~bit; boxes[bi] &= ~bit;
+        g[best] = 0; for (const u of v.CU[best]) um[u] &= ~bit;
         if (count >= limit) return;
       }
     })();
@@ -120,7 +122,7 @@
   }
 
   // level 1 = naked singles only, level 2 = + hidden singles. Returns true if fully solved.
-  function logicSolve(grid, level) {
+  function logicSolve(grid, level, v = CLASSIC) {
     const g = grid.slice();
     for (;;) {
       const cand = new Array(81).fill(0);
@@ -129,7 +131,7 @@
         if (g[i]) continue;
         empty++;
         let m = ALL;
-        for (const p of PEERS[i]) if (g[p]) m &= ~(1 << g[p]);
+        for (const p of v.PEERS[i]) if (g[p]) m &= ~(1 << g[p]);
         cand[i] = m;
       }
       if (!empty) return true;
@@ -138,7 +140,7 @@
         if (!g[i] && POP[cand[i]] === 1) { g[i] = Math.log2(cand[i]); progress = true; }
       }
       if (!progress && level >= 2) {
-        for (const u of UNITS) {
+        for (const u of v.UNITS) {
           for (let d = 1; d <= 9; d++) {
             const bit = 1 << d;
             let pos = -1, n = 0;
@@ -164,45 +166,60 @@
     expert: { target: 23, avoid: 2, tries: 10 },
   };
 
-  function carve(sol, r, target, logic) {
+  function carve(sol, r, target, logic, v) {
     const puz = sol.slice();
     let clues = 81;
+    const ok = () => countSolutions(puz, 2, v) === 1 && (!logic || logicSolve(puz, logic, v));
     const order = shuffle(Array.from({ length: 41 }, (_, i) => i), r);
     for (const i of order) {
       if (clues <= target) break;
       const j = 80 - i; // keep the classic rotational symmetry
       const vi = puz[i], vj = puz[j];
       puz[i] = 0; puz[j] = 0;
-      if (countSolutions(puz, 2) !== 1 || (logic && !logicSolve(puz, logic))) {
-        puz[i] = vi; puz[j] = vj;
-      } else {
-        clues -= i === j ? 1 : 2;
-      }
+      if (!ok()) { puz[i] = vi; puz[j] = vj; }
+      else clues -= i === j ? 1 : 2;
     }
     // second pass: single cells, to get closer to sparse targets
     for (const i of shuffle(Array.from({ length: 81 }, (_, k) => k), r)) {
       if (clues <= target) break;
       if (!puz[i]) continue;
-      const v = puz[i];
+      const val = puz[i];
       puz[i] = 0;
-      if (countSolutions(puz, 2) !== 1 || (logic && !logicSolve(puz, logic))) puz[i] = v;
+      if (!ok()) puz[i] = val;
       else clues--;
     }
     return { puzzle: puz, solution: sol, clues };
   }
 
-  function generate(diff, seed, opts) {
+  function generate(diff, seed, opts = {}) {
     const cfg = CFG[diff] || CFG.medium;
+    const v = opts.diag ? DIAGONAL : CLASSIC;
     const r = rng(seed);
-    const target = cfg.target - (opts && opts.boss ? 3 : 0);
+    const target = cfg.target - (opts.boss ? 3 : 0);
     let best = null;
     for (let t = 0; t < (cfg.tries || 1); t++) {
-      const res = carve(solvedGrid(r), r, target, cfg.logic);
-      if (!cfg.avoid || !logicSolve(res.puzzle, cfg.avoid)) return res;
+      const res = carve(solvedGrid(r, v), r, target, cfg.logic, v);
+      if (!cfg.avoid || !logicSolve(res.puzzle, cfg.avoid, v)) return res;
       if (!best || res.clues < best.clues) best = res;
     }
     return best;
   }
 
-  global.Sudoku = { rng, hash, generate, countSolutions, logicSolve, PEERS, UNITS, ROW, COL, BOX, POP, ALL };
+  // Givens that can be hidden while the puzzle stays uniquely solvable by singles.
+  function pickFog(puzzle, seed, count, v = CLASSIC) {
+    const r = rng(seed), p = puzzle.slice(), fog = [];
+    for (const i of shuffle(Array.from({ length: 81 }, (_, k) => k).filter(k => p[k]), r)) {
+      if (fog.length >= count) break;
+      const val = p[i];
+      p[i] = 0;
+      if (countSolutions(p, 2, v) === 1 && logicSolve(p, 2, v)) fog.push(i);
+      else p[i] = val;
+    }
+    return fog;
+  }
+
+  global.Sudoku = {
+    rng, hash, shuffle, generate, countSolutions, logicSolve, pickFog,
+    CLASSIC, DIAGONAL, PEERS: CLASSIC.PEERS, UNITS: CLASSIC.UNITS, ROW, COL, BOX, POP, ALL,
+  };
 })(window);

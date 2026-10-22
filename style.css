@@ -262,12 +262,14 @@ h1, h2, h3 { font-family: 'Shippori Mincho B1', 'Hiragino Mincho ProN', serif; l
 .locked-note div { font-size: 46px; margin-bottom: 8px; }
 
 /* ---------- Game ---------- */
-#screen-game { --bs: max(270px, min(calc(100vw - 28px), 492px, calc(100dvh - 350px - env(safe-area-inset-top) - env(safe-area-inset-bottom)))); align-items: center; gap: 10px; }
+#screen-game { --bs: max(270px, min(calc(100vw - 28px), 492px, calc(100dvh - 350px - env(safe-area-inset-top) - env(safe-area-inset-bottom)))); align-items: center; gap: 10px; position: relative; }
 #screen-game .topbar { width: 100%; }
 .g-stats { width: var(--bs); display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 15px; min-height: 24px; }
 .g-stats .heart { color: var(--error); font-size: 20px; margin-right: 2px; transition: all .3s; }
 .g-stats .heart.lost { color: var(--line); transform: scale(.85); }
 #g-timer { font-variant-numeric: tabular-nums; color: var(--muted); }
+#g-timer.storm { color: var(--error); animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .45; } }
 .board-wrap { position: relative; }
 .board {
   width: var(--bs); height: var(--bs); display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(9, 1fr);
@@ -289,11 +291,33 @@ h1, h2, h3 { font-family: 'Shippori Mincho B1', 'Hiragino Mincho ProN', serif; l
 .cell .v { position: relative; z-index: 1; }
 .cell.given { color: var(--given); font-weight: 700; }
 .cell.user { color: var(--user); font-weight: 500; }
+.cell.diag { background: color-mix(in srgb, var(--accent2) 10%, var(--cell)); }
+.cell.fog { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--muted) 22%, var(--cell)) 0 6px, color-mix(in srgb, var(--muted) 12%, var(--cell)) 6px 12px); }
+.cell.fog::before { content: "🌫️"; font-size: calc(var(--bs) / 9 * .38); opacity: .55; }
 .cell.peer { background: var(--peer); }
 .cell.same { background: var(--same); }
 .cell.wrong { color: var(--error); background: var(--error-bg); }
 .cell.sel { background: var(--sel); color: var(--sel-text); }
 .cell.sel.wrong { background: var(--error); color: #fff; }
+.cell.hint-unit { background: color-mix(in srgb, var(--gold) 20%, var(--cell)); }
+.cell.hint-unit.sel { background: var(--sel); }
+.cell.hint-cell { box-shadow: inset 0 0 0 3px var(--gold); animation: hintGlow 1.2s ease-in-out infinite; z-index: 1; }
+@keyframes hintGlow { 50% { box-shadow: inset 0 0 0 3px var(--gold), 0 0 14px var(--gold); } }
+.board.kanji .cell { font-size: calc(var(--bs) / 9 * .5); font-family: "Shippori Mincho B1", "Hiragino Mincho ProN", serif; }
+
+/* sensei hint bar: overlays the header so the board never jumps */
+.sensei {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 5; min-height: 84px; display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: 16px; background: linear-gradient(180deg, var(--panel2), var(--panel));
+  border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--line)); box-shadow: 0 10px 28px rgba(0,0,0,.35); animation: rise .25s ease-out;
+}
+.sensei p { flex: 1; font-size: 14px; line-height: 1.35; }
+.sensei p b { color: var(--gold); }
+.ss-seal {
+  flex: none; width: 42px; height: 42px; border-radius: 8px; display: grid; place-items: center; transform: rotate(-4deg);
+  background: #b8261a; color: #fff4e6; border: 2px double #fff4e6; font: 800 22px/1 "Shippori Mincho B1", "Hiragino Mincho ProN", serif;
+}
+.ss-x { flex: none; width: 34px; height: 34px; border-radius: 10px; font-size: 22px; color: var(--muted); }
 [data-theme="neon"] .cell .v { text-shadow: 0 0 8px currentColor; }
 [data-theme="gilded"] .cell.given .v { text-shadow: 0 0 10px color-mix(in srgb, var(--gold) 40%, transparent); }
 .cell .notes { position: absolute; inset: 2px; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); pointer-events: none; }
@@ -309,8 +333,8 @@ h1, h2, h3 { font-family: 'Shippori Mincho B1', 'Hiragino Mincho ProN', serif; l
 .paused-cover { position: absolute; inset: 0; display: grid; place-items: center; }
 .paused-cover button { padding: 14px 28px; border-radius: 16px; background: var(--accent); color: var(--accent-text); font-weight: 800; font-size: 17px; display: flex; gap: 8px; align-items: center; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
 
-.tools { width: var(--bs); display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.tool { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 6px; border-radius: 14px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.tools { width: var(--bs); display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.tool { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 6px; border-radius: 14px; color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .tool:active { background: var(--panel); }
 .tool svg { width: 24px; height: 24px; color: var(--text); }
 .tool em { position: absolute; top: 2px; right: calc(50% - 26px); font-style: normal; font-size: 10px; font-weight: 800; padding: 1px 5px; border-radius: 99px; background: var(--line); color: var(--text); }
@@ -326,6 +350,7 @@ h1, h2, h3 { font-family: 'Shippori Mincho B1', 'Hiragino Mincho ProN', serif; l
 .key small { font-size: 10px; color: var(--muted); }
 .key:active { transform: scale(.92); background: var(--sel); }
 .key.done { opacity: .25; pointer-events: none; }
+.numpad.kanji .key span { font-size: 22px; font-family: "Shippori Mincho B1", "Hiragino Mincho ProN", serif; }
 .numpad.notes-mode .key span { font-size: 17px; color: var(--accent); align-self: flex-start; margin-left: 7px; }
 
 /* ---------- Shop & Journal ---------- */
@@ -335,6 +360,7 @@ h1, h2, h3 { font-family: 'Shippori Mincho B1', 'Hiragino Mincho ProN', serif; l
 .tcard:active { transform: scale(.97); }
 .tpreview { border-radius: 12px; padding: 10px; background: radial-gradient(120% 80% at 50% 0%, var(--bg2), var(--bg)); display: grid; place-items: center; }
 .tpreview .mini { display: grid; grid-template-columns: repeat(3, 26px); grid-template-rows: repeat(3, 26px); border: 2px solid var(--thick); border-radius: 6px; overflow: hidden; }
+.tpreview .mini.kanji span { font-family: "Shippori Mincho B1", "Hiragino Mincho ProN", serif; font-size: 13px; }
 .tpreview .mini span { background: var(--cell); color: var(--given); display: grid; place-items: center; font-size: 14px; font-weight: 700; border: .5px solid var(--thin); font-family: var(--digit-font); }
 .tpreview .mini span.s { background: var(--sel); color: var(--sel-text); }
 .tpreview .mini span.u { color: var(--user); }

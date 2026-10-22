@@ -2,9 +2,10 @@
 (() => {
 const $ = (s, el = document) => el.querySelector(s);
 const SAVE_KEY = 'sudokuQuest.save.v1';
-const { PEERS, ROW, COL, BOX, UNITS, POP } = Sudoku;
-const PEER_SET = PEERS.map(p => new Set(p));
+const { ROW, COL, POP } = Sudoku;
 const STAGES = 10; // per realm; the last one is the boss
+const VARIANTS = [Sudoku.CLASSIC, Sudoku.DIAGONAL].map(v => ({ ...v, PEER_SET: v.PEERS.map(p => new Set(p)) }));
+const V = g => VARIANTS[g && g.diag ? 1 : 0]; // peers/units for the current game
 
 /* ---------- Game data ---------- */
 const DIFFS = {
@@ -23,6 +24,23 @@ const REALMS = [
   { name: "Dragon's Peak",    diff: 'hard',   icon: '⛰️', boss: 'The Storm Dragon',     bossIcon: '🐉', hue: '#9b7fd1', lore: 'Thunder rolls over the summit. Only the patient survive the climb.' },
   { name: 'Celestial Palace', diff: 'expert', icon: '🏯', boss: 'The Moon Emperor',     bossIcon: '🌕', hue: '#e8c06a', lore: 'Above the clouds, the final grids are written in moonlight.' },
 ];
+
+// One twist per boss, by realm index
+const TWISTS = [
+  { id: 'shuffle',  icon: '🍃', name: "Tanuki's Trick",      desc: 'The tanuki has shuffled the keys on your number pad. Read carefully before you tap.' },
+  { id: 'fog',      icon: '🌫️', name: 'Mountain Fog',        desc: 'Fog hides some of the given numbers. Solve a square in a box to clear the fog there.' },
+  { id: 'illusion', icon: '🦊', name: 'Fox-Fire Illusions',  desc: 'Four numbers on the board are illusions. Spot the duplicates and write over them.' },
+  { id: 'storm',    icon: '⚡', name: 'Racing the Storm',    desc: 'The storm breaks in 25 minutes. Finish the grid before it does.' },
+  { id: 'diagonal', icon: '🌕', name: 'Celestial Diagonals', desc: 'Both long diagonals must also contain 1 to 9, just like rows, columns and boxes.' },
+];
+const STORM_LIMIT = 25 * 60;
+
+const KANJI = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+const NUMERALS = [
+  { id: 'arabic', name: 'Arabic', price: 0,   desc: 'Classic 1 to 9' },
+  { id: 'kanji',  name: 'Kanji',  price: 200, desc: 'Brushed 一 to 九' },
+];
+const glyph = d => (S.numerals === 'kanji' ? KANJI[d] : String(d));
 
 const THEMES = [
   { id: 'lacquer',   name: 'Lacquer',   price: 0,    desc: 'Ink, vermilion and gold', meta: '#140d0b' },
@@ -48,7 +66,7 @@ const ACHIEVEMENTS = [
   { id: 'daily7',   icon: '☄️', name: 'Eternal Flame',  desc: 'Reach a 7-day daily streak' },
   { id: 'solve25',  icon: '📜', name: 'Scholar',        desc: 'Solve 25 puzzles' },
   { id: 'solve100', icon: '📚', name: 'Loremaster',     desc: 'Solve 100 puzzles' },
-  { id: 'collector', icon: '🎨', name: 'Collector',     desc: 'Own 4 themes' },
+  { id: 'collector', icon: '🪭', name: 'Collector',     desc: 'Own 5 themes' },
   { id: 'allseeing', icon: '👁️', name: 'All-Seeing',    desc: 'Solve an Expert puzzle flawlessly' },
   { id: 'stars100', icon: '⭐', name: 'Star Gatherer',  desc: 'Collect 100 quest stars' },
 ];
@@ -68,13 +86,14 @@ const ICON = {
     <path class="near" d="M0 92 L50 66 L95 84 L150 56 L210 88 L260 70 L310 90 L360 62 L400 80 V110 H0z"/>
     <path class="mist" d="M0 98 Q100 86 200 98 T400 96 V110 H0z"/>
   </svg>`,
+  grid: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/><path d="M5.5 5.5h1M11.5 11.5h1M17.5 17.5h1" stroke-width="2.4"/></svg>',
 };
 
 /* ---------- Save data ---------- */
 function defaultSave() {
   return {
     version: 1, xp: 0, gold: 0,
-    theme: 'lacquer', owned: ['lacquer', 'parchment', 'midnight'],
+    theme: 'lacquer', owned: ['lacquer', 'parchment', 'midnight'], numerals: 'arabic',
     settings: { sound: true, peers: true, same: true, autoNotes: true, timer: true },
     quest: {},        // "realm-stage" -> { stars, best, clears }
     daily: {},        // "YYYY-MM-DD" -> { time, stars }
@@ -298,7 +317,8 @@ function stageModal(r, s) {
   modal(`<div class="m-icon">${boss ? R.bossIcon : R.icon}</div>
     <h2>${boss ? R.boss : stageLabel(s)}</h2>
     <p class="muted">${R.name} · ${D.name}${boss ? ' · Boss' : ''}</p>
-    <p>${boss ? 'A guardian bars the way. Fewer clues, only <b>1 hint</b>, and three hearts. Win to open the next realm.' : 'Three hearts, three hints. Finish without mistakes or hints for ★★★.'}</p>
+    <p>${boss ? 'A guardian bars the way. Fewer clues, only <b>1 reveal</b>, and three hearts. Win to open the next realm.' : 'Three hearts, three reveals. Finish without mistakes or reveals for ★★★.'}</p>
+    ${boss ? `<div class="banner" style="text-align:left">${TWISTS[r].icon} <b>${TWISTS[r].name}</b><br><span class="muted">${TWISTS[r].desc}</span></div>` : ''}
     ${rec ? `<div class="stars-row" style="margin:8px 0 0">${[1, 2, 3].map(k => `<span class="star ${k <= rec.stars ? 'on' : ''}" style="font-size:28px;animation:none">★</span>`).join('')}</div><p class="muted" style="margin-top:0">Best ${fmtTime(rec.best)} · replay for a new puzzle</p>` : `<p class="muted">Reward: up to <b style="color:var(--gold)">${maxGold}</b> gold</p>`}
     <div class="m-btns"><button class="btn primary" data-act="go">${rec ? 'Replay' : boss ? 'Face the guardian' : 'Begin'}</button><button class="btn" data-act="close">Not yet</button></div>`,
     { go: () => { closeModal(); startQuest(r, s); } });
@@ -322,15 +342,34 @@ function startGame(opts) {
 function createGame(opts) {
   $('#loading').classList.remove('hidden');
   setTimeout(() => {
-    const { puzzle, solution } = Sudoku.generate(opts.diff, opts.seed, { boss: opts.boss });
+    const twist = opts.mode === 'quest' && opts.boss ? TWISTS[opts.realm].id : null;
+    const { puzzle, solution } = Sudoku.generate(opts.diff, opts.seed, { boss: opts.boss, diag: twist === 'diagonal' });
     S.current = {
       ...opts, puzzle, solution, values: puzzle.slice(), notes: new Array(81).fill(0),
       mistakes: 0, lives: opts.mode === 'quick' ? null : 3, hints: opts.boss ? 1 : 3, hintsUsed: 0, elapsed: 0, history: [],
     };
+    if (twist) applyTwist(S.current, twist);
     persist();
     $('#loading').classList.add('hidden');
     openGame();
   }, 60);
+}
+function applyTwist(g, id) {
+  const r = Sudoku.rng(g.seed ^ 0x9e3779b9);
+  g.twist = id;
+  if (id === 'diagonal') g.diag = true;
+  if (id === 'shuffle') g.padOrder = Sudoku.shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9], r);
+  if (id === 'storm') g.timeLimit = STORM_LIMIT;
+  if (id === 'fog') g.fog = Sudoku.pickFog(g.puzzle, g.seed + 1, 10);
+  if (id === 'illusion') {
+    // decoys sit in empty squares and always duplicate a visible given, so a sharp eye can catch them
+    g.illusions = {};
+    for (const i of Sudoku.shuffle(Array.from({ length: 81 }, (_, k) => k).filter(k => !g.puzzle[k]), r)) {
+      if (Object.keys(g.illusions).length >= 4) break;
+      const seen = [...new Set(V(g).PEERS[i].map(p => g.puzzle[p]).filter(d => d && d !== g.solution[i]))];
+      if (seen.length) g.illusions[i] = seen[Math.floor(r() * seen.length)];
+    }
+  }
 }
 function startDaily() {
   const dk = dayKey();
@@ -349,12 +388,14 @@ function quickModal() {
 
 /* ---------- Game screen ---------- */
 let cells = [], keys = [], selected = -1, notesMode = false, paused = false;
+let sensei = null; // current hint step: { kind, cell, digit, unit, text }; not saved
 function buildGameScreen() {
   const el = $('#screen-game');
   el.innerHTML = `<div class="topbar">
       <button class="icon-btn" id="g-back" aria-label="Back">${ICON.back}</button>
       <div class="tb-title"><div id="g-name"></div><div class="sub" id="g-sub"></div></div>
       <button class="icon-btn" id="g-pause" aria-label="Pause">${ICON.pause}</button></div>
+    <div class="sensei hidden" id="sensei"><span class="ss-seal" id="ss-seal">師</span><p id="ss-text"></p><button class="ss-x" id="ss-x" aria-label="Close">×</button></div>
     <div class="g-stats"><div id="g-lives"></div><div id="g-timer">0:00</div></div>
     <div class="board-wrap"><div class="board" id="board"></div>
       <div class="paused-cover hidden" id="paused-cover"><button id="g-resume">${ICON.play} Resume</button></div></div>
@@ -362,7 +403,8 @@ function buildGameScreen() {
       <button class="tool" id="t-undo">${ICON.undo}<span>Undo</span></button>
       <button class="tool" id="t-erase">${ICON.erase}<span>Erase</span></button>
       <button class="tool" id="t-notes">${ICON.pencil}<span>Notes</span><em id="notes-badge">OFF</em></button>
-      <button class="tool" id="t-hint">${ICON.bulb}<span>Hint</span><em id="hint-badge">3</em></button>
+      <button class="tool" id="t-fill">${ICON.grid}<span>Fill notes</span></button>
+      <button class="tool" id="t-hint">${ICON.bulb}<span id="hint-label">Hint</span><em id="hint-badge">3</em></button>
     </div>
     <div class="numpad" id="numpad"></div>`;
   const board = $('#board');
@@ -377,7 +419,7 @@ function buildGameScreen() {
   for (let d = 1; d <= 9; d++) {
     const k = document.createElement('button');
     k.className = 'key'; k.dataset.d = d;
-    k.innerHTML = `<span>${d}</span><small></small>`;
+    k.innerHTML = '<span></span><small></small>';
     pad.appendChild(k); keys.push(k);
   }
   board.addEventListener('click', e => {
@@ -388,7 +430,9 @@ function buildGameScreen() {
   $('#t-undo').onclick = undo;
   $('#t-erase').onclick = erase;
   $('#t-notes').onclick = () => { notesMode = !notesMode; sfx.tap(); renderTools(); };
+  $('#t-fill').onclick = fillNotes;
   $('#t-hint').onclick = hint;
+  $('#ss-x').onclick = () => { clearSensei(); renderBoard(); renderTools(); };
   $('#g-pause').onclick = () => setPaused(!paused);
   $('#g-resume').onclick = () => setPaused(false);
   $('#g-back').onclick = leaveGame;
@@ -406,66 +450,190 @@ function setPaused(p) {
 }
 function openGame() {
   const g = S.current; if (!g) return goHome();
-  selected = -1; notesMode = false;
-  const name = $('#g-name'), sub = $('#g-sub');
+  selected = -1; notesMode = false; clearSensei();
+  const name = $('#g-name'), sub = $('#g-sub'), twist = g.twist && TWISTS.find(t => t.id === g.twist);
   if (g.mode === 'quest') {
     const R = REALMS[g.realm];
     name.textContent = R.icon + ' ' + R.name;
-    sub.textContent = g.boss ? 'Boss · ' + R.boss : stageLabel(g.stage) + ' · ' + DIFFS[g.diff].name;
+    sub.textContent = g.boss ? 'Boss · ' + (twist ? twist.icon + ' ' + twist.name : R.boss) : stageLabel(g.stage) + ' · ' + DIFFS[g.diff].name;
     $('#screen-game').style.setProperty('--hue', R.hue);
   } else {
     name.textContent = g.mode === 'daily' ? '🏮 Daily Challenge' : '🎴 Quick Play';
     sub.textContent = DIFFS[g.diff].name + (g.mode === 'daily' ? ' · ' + g.dateKey : '');
     $('#screen-game').style.setProperty('--hue', DIFFS[g.diff].color);
   }
+  const order = g.padOrder || [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  keys.forEach((k, j) => { k.dataset.d = order[j]; });
+  cells.forEach((c, i) => c.classList.toggle('diag', !!g.diag && (ROW[i] === COL[i] || ROW[i] + COL[i] === 8)));
   show('game');
   setPaused(false);
+  if (twist && !g.history.length && g.elapsed < 3) {
+    sensei = { kind: 'info' };
+    showSensei(`<b>${twist.name}.</b> ${twist.desc}`, twist.icon);
+  }
   renderGame();
 }
+
+/* What the player can see: fog hides givens, illusions show fake numbers */
+const fogged = (g, i) => !!(g.fog && g.fog.includes(i));
+const illusion = (g, i) => (g.illusions && g.illusions[i]) || 0;
+const shown = (g, i) => fogged(g, i) ? 0 : g.values[i] || illusion(g, i);
+const knownVal = (g, i) => { const v = g.values[i]; return v && v === g.solution[i] && !fogged(g, i) ? v : 0; };
+function candidates(g, i) {
+  let m = Sudoku.ALL;
+  for (const p of V(g).PEERS[i]) { const x = knownVal(g, p); if (x) m &= ~(1 << x); }
+  return m;
+}
+
 function renderGame() { renderBoard(); renderPad(); renderTools(); renderStats(); }
 function renderBoard() {
   const g = S.current; if (!g) return;
-  const sel = selected, sv = sel >= 0 ? g.values[sel] : 0;
+  const sel = selected, sv = sel >= 0 ? shown(g, sel) : 0, peers = V(g).PEER_SET;
+  const hu = sensei && sensei.unit ? new Set(sensei.unit) : null;
+  const hc = sensei && (sensei.kind === 'naked' || sensei.kind === 'deep') ? sensei.cell : -1;
+  $('#board').classList.toggle('kanji', S.numerals === 'kanji');
   for (let i = 0; i < 81; i++) {
-    const c = cells[i], v = g.values[i], given = !!g.puzzle[i], cl = c.classList;
-    cl.toggle('given', given);
-    cl.toggle('user', !given && !!v);
-    cl.toggle('wrong', !given && !!v && v !== g.solution[i]);
+    const c = cells[i], v = g.values[i], fog = fogged(g, i), fake = !v && illusion(g, i), cl = c.classList;
+    const given = !!g.puzzle[i] && !fog, d = shown(g, i);
+    cl.toggle('given', given || !!fake);
+    cl.toggle('fog', fog);
+    cl.toggle('user', !g.puzzle[i] && !!v);
+    cl.toggle('wrong', !g.puzzle[i] && !!v && v !== g.solution[i]);
     cl.toggle('sel', i === sel);
-    cl.toggle('peer', S.settings.peers && sel >= 0 && PEER_SET[sel].has(i));
-    cl.toggle('same', S.settings.same && !!sv && v === sv && i !== sel);
-    c.firstChild.textContent = v || '';
-    const n = v ? 0 : g.notes[i], ns = c.lastChild.children;
-    for (let d = 1; d <= 9; d++) {
-      const on = !!(n & (1 << d)), el = ns[d - 1];
-      el.textContent = on ? d : '';
-      el.classList.toggle('hl', on && d === sv);
+    cl.toggle('peer', S.settings.peers && sel >= 0 && peers[sel].has(i));
+    cl.toggle('same', S.settings.same && !!sv && d === sv && i !== sel);
+    cl.toggle('hint-unit', !!hu && hu.has(i));
+    cl.toggle('hint-cell', i === hc);
+    c.firstChild.textContent = d ? glyph(d) : '';
+    const n = d ? 0 : g.notes[i], ns = c.lastChild.children;
+    for (let k = 1; k <= 9; k++) {
+      const on = !!(n & (1 << k)), el = ns[k - 1];
+      el.textContent = on ? k : '';
+      el.classList.toggle('hl', on && k === sv);
     }
   }
 }
 function renderPad() {
   const g = S.current, counts = new Array(10).fill(0);
-  g.values.forEach((v, i) => { if (v && v === g.solution[i]) counts[v]++; });
-  keys.forEach((k, j) => {
-    const left = 9 - counts[j + 1];
+  g.values.forEach((v, i) => { if (knownVal(g, i)) counts[v]++; });
+  keys.forEach(k => {
+    const d = +k.dataset.d, left = 9 - counts[d];
     k.classList.toggle('done', left === 0);
+    k.firstChild.textContent = glyph(d);
     k.lastChild.textContent = left;
   });
   $('#numpad').classList.toggle('notes-mode', notesMode);
+  $('#numpad').classList.toggle('kanji', S.numerals === 'kanji');
 }
 function renderTools() {
-  const g = S.current;
+  const g = S.current, revealing = sensei && sensei.kind !== 'info';
   $('#t-notes').classList.toggle('on', notesMode);
   $('#notes-badge').textContent = notesMode ? 'ON' : 'OFF';
+  $('#hint-label').textContent = revealing ? 'Reveal' : 'Hint';
+  $('#t-hint').classList.toggle('on', !!revealing);
   $('#hint-badge').textContent = g.hints;
   $('#numpad').classList.toggle('notes-mode', notesMode);
 }
 function renderStats() {
-  const g = S.current;
+  const g = S.current, t = $('#g-timer');
   $('#g-lives').innerHTML = g.lives != null
     ? [0, 1, 2].map(k => `<span class="heart ${k < g.lives ? '' : 'lost'}">♥</span>`).join('')
     : `<span class="muted">Mistakes: ${g.mistakes}</span>`;
-  $('#g-timer').textContent = S.settings.timer ? '⏱ ' + fmtTime(g.elapsed) : '';
+  if (g.timeLimit) {
+    const left = g.timeLimit - g.elapsed;
+    t.textContent = '⚡ ' + fmtTime(left) + ' left';
+    t.classList.toggle('storm', left <= 120);
+  } else {
+    t.textContent = S.settings.timer ? '⏱ ' + fmtTime(g.elapsed) : '';
+    t.classList.remove('storm');
+  }
+}
+
+/* ---------- Sensei hints ---------- */
+function showSensei(html, seal = '師') {
+  $('#ss-seal').textContent = seal;
+  $('#ss-text').innerHTML = html;
+  $('#sensei').classList.remove('hidden');
+}
+function clearSensei() { sensei = null; $('#sensei').classList.add('hidden'); }
+// Finds the easiest next step a person could spot: hidden single in a box, then a naked
+// single, then hidden singles in rows/columns/diagonals. Falls back to the most constrained square.
+function findStep(g) {
+  const v = V(g), open = i => !knownVal(g, i), target = i => open(i) && !g.puzzle[i];
+  const cand = Array.from({ length: 81 }, (_, i) => open(i) ? candidates(g, i) : 0);
+  const unitName = u => u < 9 ? 'row' : u < 18 ? 'column' : u < 27 ? 'box' : 'diagonal';
+  const where = v.diag ? 'row, column, box or diagonal' : 'row, column or box';
+  const hidden = units => {
+    for (const u of units) {
+      const cellsIn = v.UNITS[u];
+      for (let d = 1; d <= 9; d++) {
+        if (cellsIn.some(i => knownVal(g, i) === d)) continue;
+        const spots = cellsIn.filter(i => open(i) && (cand[i] & (1 << d)));
+        if (spots.length === 1 && target(spots[0])) {
+          return { kind: 'hidden', cell: spots[0], digit: d, unit: cellsIn,
+            text: `Look at the glowing ${unitName(u)}. There is only <b>one</b> square where <b>${glyph(d)}</b> can go. Can you find it?` };
+        }
+      }
+    }
+    return null;
+  };
+  const naked = i => ({ kind: 'naked', cell: i, digit: g.solution[i], unit: v.PEERS[i],
+    text: `Study the bright square. Every number but one already appears in its ${where}. Which one is left?` });
+  const range = (a, b) => Array.from({ length: b - a }, (_, k) => a + k);
+
+  if (selected >= 0 && target(selected) && POP[cand[selected]] === 1) return naked(selected);
+  const box = hidden(range(18, 27));
+  if (box) return box;
+  for (let i = 0; i < 81; i++) if (target(i) && POP[cand[i]] === 1) return naked(i);
+  const line = hidden([...range(0, 18), ...range(27, v.UNITS.length)]);
+  if (line) return line;
+  let best = -1, bn = 10;
+  for (let i = 0; i < 81; i++) if (target(i) && POP[cand[i]] < bn) { bn = POP[cand[i]]; best = i; }
+  if (best < 0) return null;
+  return { kind: 'deep', cell: best, digit: g.solution[best], unit: [best],
+    text: `No simple step here. The bright square has only <b>${bn}</b> possible numbers. Try notes, or tap Reveal.` };
+}
+function hint() {
+  const g = S.current; if (!g || paused) return;
+  if (!sensei || sensei.kind === 'info') {
+    // first tap: a free nudge that explains where to look
+    const step = findStep(g);
+    if (!step) return;
+    sensei = step;
+    showSensei(step.text);
+    tone(784, 0.15, 'sine', 0.06); tone(1175, 0.25, 'sine', 0.05, 0.1);
+    renderBoard(); renderTools();
+    return;
+  }
+  // second tap: reveal the answer, which costs a hint
+  if (g.hints <= 0) { toast(g.boss ? 'The guardian allows only one reveal' : 'No reveals left. Sensei can still guide you'); return; }
+  const i = sensei.cell, d = sensei.digit;
+  clearSensei();
+  pushHistory([i, ...peersWithNote(i, d)]);
+  g.values[i] = d; g.notes[i] = 0;
+  clearPeerNotes(i, d);
+  dispel(i);
+  g.hints--; g.hintsUsed++;
+  selected = i;
+  popCell(i);
+  if (!afterCorrect(i)) tone(1047, 0.2, 'sine', 0.08);
+  if (checkWin()) return;
+  persist(); renderGame();
+}
+function fillNotes() {
+  const g = S.current; if (!g || paused) return;
+  const changed = [], next = {};
+  for (let i = 0; i < 81; i++) {
+    if (g.values[i] || g.puzzle[i]) continue;
+    const m = candidates(g, i);
+    if (g.notes[i] !== m) { changed.push(i); next[i] = m; }
+  }
+  if (!changed.length) { toast('Notes are already complete'); return; }
+  pushHistory(changed);
+  changed.forEach(i => { g.notes[i] = next[i]; });
+  clearSensei();
+  sfx.note(); toast('Notes filled in ✍️');
+  persist(); renderGame();
 }
 
 function pushHistory(idx) {
@@ -475,26 +643,35 @@ function pushHistory(idx) {
 }
 function clearPeerNotes(i, d, affected) {
   const g = S.current, bit = 1 << d;
-  for (const p of PEERS[i]) if (g.notes[p] & bit) { if (affected) affected.push(p); g.notes[p] &= ~bit; }
+  for (const p of V(g).PEERS[i]) if (g.notes[p] & bit) { if (affected) affected.push(p); g.notes[p] &= ~bit; }
 }
-function peersWithNote(i, d) { return PEERS[i].filter(p => S.current.notes[p] & (1 << d)); }
+function peersWithNote(i, d) { const g = S.current; return V(g).PEERS[i].filter(p => g.notes[p] & (1 << d)); }
 const isLocked = i => { const g = S.current; return !!g.puzzle[i] || (g.values[i] && g.values[i] === g.solution[i]); };
+// writing into an illusion square breaks the illusion for good
+function dispel(i) {
+  const g = S.current;
+  if (illusion(g, i)) { delete g.illusions[i]; toast('🦊 An illusion fades…'); }
+}
 
 function input(d) {
   const g = S.current;
   if (!g || paused || modalOpen()) return;
   const i = selected;
   if (i < 0) { toast('Tap a square first'); return; }
+  if (fogged(g, i)) { toast('🌫️ Fog hides this square. Solve nearby to clear it'); return; }
   if (isLocked(i)) { sfx.tap(); return; }
+  clearSensei();
   if (notesMode) {
     if (g.values[i]) return;
     pushHistory([i]);
     g.notes[i] ^= 1 << d;
+    dispel(i);
     sfx.note();
   } else {
     if (g.values[i] === d) return;
     pushHistory(S.settings.autoNotes ? [i, ...peersWithNote(i, d)] : [i]);
     g.values[i] = d; g.notes[i] = 0;
+    dispel(i);
     popCell(i);
     if (d !== g.solution[i]) {
       g.mistakes++;
@@ -506,26 +683,38 @@ function input(d) {
       }
     } else {
       if (S.settings.autoNotes) clearPeerNotes(i, d);
-      if (!checkUnits(i)) sfx.place();
+      if (!afterCorrect(i)) sfx.place();
       if (checkWin()) return;
     }
   }
   persist(); renderGame();
 }
 function popCell(i) { const c = cells[i]; c.classList.remove('pop'); void c.offsetWidth; c.classList.add('pop'); }
-function checkUnits(i) {
-  const g = S.current; let any = false;
-  [ROW[i], 9 + COL[i], 18 + BOX[i]].forEach(u => {
-    const unit = UNITS[u];
+function flashCells(list) {
+  list.forEach((j, k) => {
+    const c = cells[j];
+    c.classList.remove('flash'); void c.offsetWidth;
+    c.style.setProperty('--fd', (k * 0.04) + 's');
+    c.classList.add('flash');
+    setTimeout(() => c.classList.remove('flash'), 1000);
+  });
+}
+// After a correct number: lift fog in that box and celebrate finished units. True if anything happened.
+function afterCorrect(i) {
+  const g = S.current, v = V(g);
+  let any = false;
+  if (g.fog && g.fog.length) {
+    const lifted = g.fog.filter(f => Sudoku.BOX[f] === Sudoku.BOX[i]);
+    if (lifted.length) {
+      g.fog = g.fog.filter(f => Sudoku.BOX[f] !== Sudoku.BOX[i]);
+      flashCells(lifted); any = true;
+    }
+  }
+  v.CU[i].forEach(u => {
+    const unit = v.UNITS[u];
     if (!unit.every(j => g.values[j] === g.solution[j])) return;
     any = true;
-    unit.forEach((j, k) => {
-      const c = cells[j];
-      c.classList.remove('flash'); void c.offsetWidth;
-      c.style.setProperty('--fd', (k * 0.04) + 's');
-      c.classList.add('flash');
-      setTimeout(() => c.classList.remove('flash'), 1000);
-    });
+    flashCells(unit);
   });
   if (any) sfx.unit();
   return any;
@@ -536,6 +725,7 @@ function undo() {
   if (!h) { toast('Nothing to undo'); return; }
   h.forEach(([i, v, n]) => { g.values[i] = v; g.notes[i] = n; });
   selected = h[0][0];
+  clearSensei();
   sfx.tap(); persist(); renderGame();
 }
 function erase() {
@@ -544,37 +734,13 @@ function erase() {
   if (i < 0 || isLocked(i) || (!g.values[i] && !g.notes[i])) return;
   pushHistory([i]);
   g.values[i] = 0; g.notes[i] = 0;
+  clearSensei();
   sfx.tap(); persist(); renderGame();
-}
-function hint() {
-  const g = S.current; if (!g || paused) return;
-  if (g.hints <= 0) { toast(g.boss ? 'The guardian allows only one hint' : 'No hints left'); return; }
-  let i = selected;
-  if (i < 0 || g.values[i] === g.solution[i]) {
-    // pick the open cell with the fewest candidates
-    let bn = 10; i = -1;
-    for (let j = 0; j < 81; j++) {
-      if (g.values[j] === g.solution[j]) continue;
-      let m = Sudoku.ALL;
-      for (const p of PEERS[j]) { const v = g.values[p]; if (v && v === g.solution[p]) m &= ~(1 << v); }
-      if (POP[m] < bn) { bn = POP[m]; i = j; }
-    }
-  }
-  if (i < 0) return;
-  const d = g.solution[i];
-  pushHistory([i, ...peersWithNote(i, d)]);
-  g.values[i] = d; g.notes[i] = 0;
-  clearPeerNotes(i, d);
-  g.hints--; g.hintsUsed++;
-  selected = i;
-  popCell(i);
-  if (!checkUnits(i)) tone(1047, 0.2, 'sine', 0.08);
-  if (checkWin()) return;
-  persist(); renderGame();
 }
 function checkWin() {
   const g = S.current;
   if (!g.values.every((v, i) => v === g.solution[i])) return false;
+  if (g.fog) g.fog = [];
   renderGame();
   setTimeout(win, 650);
   return true;
@@ -621,7 +787,10 @@ function win() {
   S.xp += xp; S.gold += gold;
   const newAch = checkAchievements();
   const after = levelInfo(S.xp).level;
-  if (after > before) extra = `<div class="banner">⬆️ Level ${after}! You are now a <b>${titleFor(after)}</b>.</div>` + extra;
+  if (after > before) {
+    const newTitle = titleFor(after) !== titleFor(before) ? ` You are now a <b>${titleFor(after)}</b>.` : '';
+    extra = `<div class="banner">⬆️ Level ${after}!${newTitle}</div>` + extra;
+  }
   extra += newAch.map(a => `<div class="banner gold">${a.icon} Achievement: <b>${a.name}</b> (+${ACH_GOLD} gold)</div>`).join('');
   persist();
 
@@ -654,15 +823,16 @@ function modalAfterWin(g, stars, xp, gold, extra, btns, handlers, R, newBest) {
     ${extra}
     <div class="m-btns">${btns}</div>`, handlers, false);
 }
-function lose() {
+function lose(reason) {
   const g = S.current; if (!g) return;
   S.current = null; persist();
+  clearSensei();
   sfx.lose();
   const R = g.mode === 'quest' ? REALMS[g.realm] : null;
   const retry = { mode: g.mode, realm: g.realm, stage: g.stage, diff: g.diff, boss: g.boss, seed: g.seed, dateKey: g.dateKey };
-  modal(`<div class="m-icon">${g.boss ? R.bossIcon : '💔'}</div>
-    <h2>${g.boss ? R.boss + ' prevails' : 'Out of hearts'}</h2>
-    <p class="muted">Fall seven times, stand up eight. Every attempt sharpens the mind.</p>
+  modal(`<div class="m-icon">${reason === 'storm' ? '⛈️' : g.boss ? R.bossIcon : '💔'}</div>
+    <h2>${reason === 'storm' ? 'The storm broke' : g.boss ? R.boss + ' prevails' : 'Out of hearts'}</h2>
+    <p class="muted">${reason === 'storm' ? 'The Storm Dragon swept you from the peak. ' : ''}Fall seven times, stand up eight. Every attempt sharpens the mind.</p>
     <div class="m-btns"><button class="btn primary" data-act="retry">Try again</button><button class="btn" data-act="leave">${g.mode === 'quest' ? 'Quest map' : 'Home'}</button></div>`,
     {
       retry: () => { closeModal(); createGame(retry); },
@@ -673,7 +843,7 @@ function checkAchievements() {
   const st = S.stats, ok = {
     first: st.solved >= 1, flawless: st.flawless >= 1, swift: st.swift,
     daily3: st.bestStreak >= 3, daily7: st.bestStreak >= 7, solve25: st.solved >= 25, solve100: st.solved >= 100,
-    collector: S.owned.length >= 4, allseeing: st.allseeing, stars100: totalStars() >= 100,
+    collector: S.owned.filter(id => THEMES.some(t => t.id === id)).length >= 5, allseeing: st.allseeing, stars100: totalStars() >= 100,
   };
   REALMS.forEach((_, i) => { ok['boss' + i] = !!S.quest[qkey(i, STAGES - 1)]; });
   const got = ACHIEVEMENTS.filter(a => ok[a.id] && !S.ach[a.id]);
@@ -715,17 +885,37 @@ function renderShop() {
         <div class="tpreview" data-theme="${t.id}"><div class="mini"><span>5</span><span class="p"></span><span class="u">3</span><span class="p">8</span><span class="s">7</span><span class="p"></span><span class="u">1</span><span class="p">9</span><span>2</span></div></div>
         <div><div class="tname">${t.name}</div><div class="tdesc">${t.desc}</div></div>
         <div class="tprice ${eq ? 'eq' : own ? 'own' : ''}">${eq ? '✓ Equipped' : own ? 'Owned · tap to equip' : ICON.coin + t.price}</div></button>`;
+    }).join('')}</div>
+    <h3 class="section-title">Numerals</h3>
+    <div class="theme-grid">${NUMERALS.map(n => {
+      const own = n.price === 0 || S.owned.includes('num-' + n.id), eq = (S.numerals || 'arabic') === n.id;
+      const show = d => n.id === 'kanji' ? KANJI[d] : d;
+      return `<button class="tcard ${eq ? 'equipped' : ''}" data-num-id="${n.id}">
+        <div class="tpreview"><div class="mini ${n.id}"><span>${show(5)}</span><span class="p"></span><span class="u">${show(3)}</span><span class="p">${show(8)}</span><span class="s">${show(7)}</span><span class="p"></span><span class="u">${show(1)}</span><span class="p">${show(9)}</span><span>${show(2)}</span></div></div>
+        <div><div class="tname">${n.name}</div><div class="tdesc">${n.desc}</div></div>
+        <div class="tprice ${eq ? 'eq' : own ? 'own' : ''}">${eq ? '✓ Equipped' : own ? 'Owned · tap to equip' : ICON.coin + n.price}</div></button>`;
     }).join('')}</div>`;
 }
+// Buys or equips an item; returns false if the player can't afford it
+function buy(ownKey, price, name) {
+  if (price === 0 || S.owned.includes(ownKey)) { sfx.tap(); return true; }
+  if (S.gold < price) { toast(`Need ${price - S.gold} more gold`); sfx.error(); return false; }
+  S.gold -= price; S.owned.push(ownKey); sfx.coin();
+  toast(`Unlocked ${name}!`);
+  checkAchievements().forEach(a => setTimeout(() => toast(`${a.icon} ${a.name} (+${ACH_GOLD} gold)`), 1200));
+  return true;
+}
 $('#screen-shop').addEventListener('click', e => {
-  const c = e.target.closest('[data-theme-id]'); if (!c) return;
-  const t = THEMES.find(x => x.id === c.dataset.themeId);
-  if (S.owned.includes(t.id)) { S.theme = t.id; sfx.tap(); }
-  else if (S.gold >= t.price) {
-    S.gold -= t.price; S.owned.push(t.id); S.theme = t.id; sfx.coin();
-    toast(`Unlocked ${t.name}!`);
-    checkAchievements().forEach(a => setTimeout(() => toast(`${a.icon} ${a.name} (+${ACH_GOLD} gold)`), 1200));
-  } else { toast(`Need ${t.price - S.gold} more gold`); sfx.error(); return; }
+  const tc = e.target.closest('[data-theme-id]'), nc = e.target.closest('[data-num-id]');
+  if (tc) {
+    const t = THEMES.find(x => x.id === tc.dataset.themeId);
+    if (!buy(t.id, S.owned.includes(t.id) ? 0 : t.price, t.name)) return;
+    S.theme = t.id;
+  } else if (nc) {
+    const n = NUMERALS.find(x => x.id === nc.dataset.numId);
+    if (!buy('num-' + n.id, n.price, n.name + ' numerals')) return;
+    S.numerals = n.id;
+  } else return;
   persist(); applyTheme(); renderShop();
 });
 
@@ -822,6 +1012,7 @@ setInterval(() => {
   if (!g || paused || modalOpen() || activeScreen() !== 'screen-game' || document.visibilityState !== 'visible') return;
   g.elapsed++;
   renderStats();
+  if (g.timeLimit && g.elapsed >= g.timeLimit && !g.values.every((v, i) => v === g.solution[i])) { lose('storm'); return; }
   if (g.elapsed % 5 === 0) persist();
 }, 1000);
 document.addEventListener('visibilitychange', () => {
@@ -840,6 +1031,7 @@ document.addEventListener('keydown', e => {
   else if (k === 'n' || k === 'N') { notesMode = !notesMode; renderTools(); }
   else if (k === 'z' || k === 'u') undo();
   else if (k === 'h') hint();
+  else if (k === 'f') fillNotes();
   else if (k === ' ' || k === 'Escape') setPaused(!paused);
   else if (k.startsWith('Arrow')) {
     if (selected < 0) selected = 40;
